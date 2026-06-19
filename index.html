@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Live GPS Tracker</title>
+  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600&family=JetBrains+Mono:wght@400;600&display=swap');
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0d1117;
+      --surface:   #161b22;
+      --border:    #21262d;
+      --accent:    #39d353;
+      --accent-dim:#1a6b27;
+      --text:      #e6edf3;
+      --muted:     #7d8590;
+      --danger:    #f85149;
+      --warn:      #d29922;
+      --radius:    10px;
+      --mono:      'JetBrains Mono', monospace;
+      --sans:      'Space Grotesk', sans-serif;
+    }
+
+    html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--sans); }
+
+    /* ── Layout ── */
+    .shell {
+      display: grid;
+      grid-template-rows: 56px 1fr;
+      grid-template-columns: 300px 1fr;
+      height: 100vh;
+    }
+
+    /* ── Header ── */
+    header {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 20px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+    .logo-dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 10px var(--accent);
+      animation: pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: .5; transform: scale(.7); }
+    }
+    header h1 { font-size: 15px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+    header .status-pill {
+      margin-left: auto;
+      font-family: var(--mono);
+      font-size: 11px;
+      padding: 3px 10px;
+      border-radius: 20px;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      transition: all .3s;
+    }
+    header .status-pill.active { color: var(--accent); border-color: var(--accent-dim); background: rgba(57,211,83,.07); }
+    header .status-pill.error  { color: var(--danger); border-color: var(--danger); }
+
+    /* ── Sidebar ── */
+    aside {
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      padding: 16px;
+      gap: 16px;
+    }
+
+    .card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+    }
+    .card-label {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+
+    /* Coordinate grid */
+    .coord-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .coord-item label { display: block; font-size: 10px; color: var(--muted); margin-bottom: 2px; }
+    .coord-item .val {
+      font-family: var(--mono);
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .coord-item.full { grid-column: 1 / -1; }
+
+    /* Accuracy bar */
+    .acc-row { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+    .acc-bar-wrap { flex: 1; height: 4px; background: var(--border); border-radius: 4px; overflow: hidden; }
+    .acc-bar { height: 100%; border-radius: 4px; transition: width .5s, background .5s; }
+    .acc-val { font-family: var(--mono); font-size: 12px; color: var(--muted); white-space: nowrap; }
+
+    /* Speed / heading */
+    .meta-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .meta-item { text-align: center; }
+    .meta-item .big { font-family: var(--mono); font-size: 26px; font-weight: 600; line-height: 1; }
+    .meta-item .unit { font-size: 10px; color: var(--muted); margin-top: 2px; text-transform: uppercase; }
+    .meta-item .lbl { font-size: 10px; color: var(--muted); margin-top: 6px; }
+
+    /* Compass */
+    .compass-wrap { display: flex; justify-content: center; padding: 6px 0; }
+    .compass {
+      width: 64px; height: 64px;
+      border: 2px solid var(--border);
+      border-radius: 50%;
+      position: relative;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .compass-needle {
+      width: 4px; height: 26px;
+      position: absolute;
+      top: 8px; left: 50%;
+      transform-origin: bottom center;
+      transform: translateX(-50%) rotate(0deg);
+      transition: transform .4s ease;
+    }
+    .compass-needle::before { content:''; display:block; width:4px; height:13px; background:var(--danger); border-radius:4px 4px 0 0; }
+    .compass-needle::after  { content:''; display:block; width:4px; height:13px; background:var(--muted); border-radius:0 0 4px 4px; }
+    .compass-n { position:absolute; top:4px; font-size:9px; font-weight:700; color:var(--danger); }
+    .compass-s { position:absolute; bottom:4px; font-size:9px; font-weight:700; color:var(--muted); }
+
+    /* Trail toggle */
+    .toggle-row { display: flex; align-items: center; justify-content: space-between; }
+    .toggle-row span { font-size: 13px; }
+    .toggle {
+      position: relative; width: 38px; height: 20px;
+      background: var(--border); border-radius: 20px; cursor: pointer;
+      transition: background .25s;
+    }
+    .toggle.on { background: var(--accent-dim); }
+    .toggle::after {
+      content:''; position:absolute;
+      width:14px; height:14px;
+      background: var(--muted); border-radius:50%;
+      top:3px; left:3px; transition: all .25s;
+    }
+    .toggle.on::after { background: var(--accent); left:21px; }
+
+    /* Buttons */
+    .btn {
+      width: 100%; padding: 10px;
+      border: none; border-radius: 8px; cursor: pointer;
+      font-family: var(--sans); font-size: 13px; font-weight: 600;
+      transition: all .2s; letter-spacing: .02em;
+    }
+    .btn-primary { background: var(--accent); color: #0d1117; }
+    .btn-primary:hover { filter: brightness(1.1); }
+    .btn-danger  { background: transparent; border: 1px solid var(--danger); color: var(--danger); }
+    .btn-danger:hover  { background: rgba(248,81,73,.1); }
+    .btn-secondary { background: transparent; border: 1px solid var(--border); color: var(--muted); }
+    .btn-secondary:hover { border-color: var(--text); color: var(--text); }
+    .btn:disabled { opacity: .4; cursor: not-allowed; }
+
+    /* History list */
+    .history { display:flex; flex-direction:column; gap:6px; max-height:160px; overflow-y:auto; }
+    .history-item {
+      font-family: var(--mono); font-size: 10px; color: var(--muted);
+      padding: 6px 8px; background: var(--surface); border-radius:6px;
+      border-left: 2px solid var(--accent-dim);
+    }
+    .history-item .ts { color: var(--accent); display:block; margin-bottom:2px; }
+
+    /* Error banner */
+    .error-banner {
+      display: none;
+      background: rgba(248,81,73,.1);
+      border: 1px solid var(--danger);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 12px;
+      color: var(--danger);
+      line-height: 1.5;
+    }
+
+    /* ── Map ── */
+    #map { grid-column: 2; grid-row: 2; }
+
+    /* MapLibre overrides */
+    .maplibregl-ctrl-attrib { font-size: 9px !important; }
+    .maplibregl-ctrl-group { background: var(--surface) !important; border: 1px solid var(--border) !important; }
+    .maplibregl-ctrl button { background: transparent !important; }
+    .maplibregl-ctrl button .maplibregl-ctrl-icon { filter: invert(1) !important; }
+
+    select option { background: var(--surface); }
+    select:focus { outline: none; border-color: var(--accent); }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width:4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius:4px; }
+
+    /* Responsive */
+    @media (max-width: 640px) {
+      .shell { grid-template-columns: 1fr; grid-template-rows: 56px auto 1fr; }
+      aside  { max-height: 280px; overflow-y: auto; }
+      #map   { grid-column: 1; grid-row: 3; }
+    }
+  </style>
+</head>
+<body>
+<div class="shell">
+
+  <!-- Header -->
+  <header>
+    <div class="logo-dot"></div>
+    <h1>Live GPS Tracker</h1>
+    <span class="status-pill" id="statusPill">Idle</span>
+  </header>
+
+  <!-- Sidebar -->
+  <aside>
+
+    <!-- Error -->
+    <div class="error-banner" id="errorBanner"></div>
+
+    <!-- Controls -->
+    <div class="card">
+      <div class="card-label">Controls</div>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <button class="btn btn-primary" id="btnStart">📍 Start Tracking</button>
+        <button class="btn btn-danger" id="btnStop" disabled>Stop</button>
+        <button class="btn btn-secondary" id="btnCenter" disabled>Re-center Map</button>
+      </div>
+    </div>
+
+    <!-- Map Style -->
+    <div class="card">
+      <div class="card-label">Map Style</div>
+      <select id="styleSelect" style="width:100%;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 10px;font-family:var(--sans);font-size:13px;cursor:pointer;">
+      </select>
+    </div>
+
+    <!-- Coordinates -->
+    <div class="card">
+      <div class="card-label">Position</div>
+      <div class="coord-grid">
+        <div class="coord-item">
+          <label>Latitude</label>
+          <div class="val" id="valLat">—</div>
+        </div>
+        <div class="coord-item">
+          <label>Longitude</label>
+          <div class="val" id="valLng">—</div>
+        </div>
+        <div class="coord-item full">
+          <label>Altitude</label>
+          <div class="val" id="valAlt">—</div>
+        </div>
+      </div>
+      <div style="margin-top:10px;">
+        <div class="card-label" style="margin-bottom:6px;">Accuracy</div>
+        <div class="acc-row">
+          <div class="acc-bar-wrap"><div class="acc-bar" id="accBar" style="width:0%"></div></div>
+          <span class="acc-val" id="accVal">—</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Speed & Heading -->
+    <div class="card">
+      <div class="card-label">Motion</div>
+      <div class="meta-row">
+        <div class="meta-item">
+          <div class="big" id="valSpeed">0</div>
+          <div class="unit">km/h</div>
+          <div class="lbl">Speed</div>
+        </div>
+        <div class="meta-item">
+          <div class="big" id="valHeading">—</div>
+          <div class="unit">deg</div>
+          <div class="lbl">Heading</div>
+        </div>
+      </div>
+      <div class="compass-wrap">
+        <div class="compass">
+          <span class="compass-n">N</span>
+          <div class="compass-needle" id="compassNeedle"></div>
+          <span class="compass-s">S</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Trail toggle -->
+    <div class="card">
+      <div class="card-label">Trail</div>
+      <div class="toggle-row">
+        <span>Show path trail</span>
+        <div class="toggle on" id="trailToggle"></div>
+      </div>
+    </div>
+
+    <!-- History -->
+    <div class="card" style="flex:1;">
+      <div class="card-label">Recent waypoints</div>
+      <div class="history" id="history">
+        <div style="font-size:11px;color:var(--muted);">No waypoints yet.</div>
+      </div>
+    </div>
+
+  </aside>
+
+  <!-- Map -->
+  <div id="map"></div>
+
+</div>
+
+<script>
+  // ── State ──────────────────────────────────────────────────────────────────
+  let watchId      = null;
+  let map          = null;
+  let marker       = null;
+  let trailEnabled = true;
+  let trailCoords  = [];
+  let firstFix     = true;
+
+  const MAX_HISTORY = 20;
+  const TRAIL_COLOR = '#39d353';
+
+  // ── DOM refs ───────────────────────────────────────────────────────────────
+  const btnStart   = document.getElementById('btnStart');
+  const btnStop    = document.getElementById('btnStop');
+  const btnCenter  = document.getElementById('btnCenter');
+  const statusPill = document.getElementById('statusPill');
+  const errorBnr   = document.getElementById('errorBanner');
+  const trailTgl   = document.getElementById('trailToggle');
+
+  const valLat     = document.getElementById('valLat');
+  const valLng     = document.getElementById('valLng');
+  const valAlt     = document.getElementById('valAlt');
+  const accBar     = document.getElementById('accBar');
+  const accVal     = document.getElementById('accVal');
+  const valSpeed   = document.getElementById('valSpeed');
+  const valHeading = document.getElementById('valHeading');
+  const needle     = document.getElementById('compassNeedle');
+  const histList   = document.getElementById('history');
+
+  // ── Init map ───────────────────────────────────────────────────────────────
+  const STYLES = {
+    'Dark (CARTO)':    'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+    'Liberty (OFM)':   'https://tiles.openfreemap.org/styles/liberty',
+    'Positron (OFM)':  'https://tiles.openfreemap.org/styles/positron',
+    'OSM Raster':      null, // handled specially
+  };
+
+  // Populate style selector
+  const styleSelect = document.getElementById('styleSelect');
+  Object.keys(STYLES).forEach(name => {
+    const opt = document.createElement('option');
+    opt.value = name; opt.textContent = name;
+    styleSelect.appendChild(opt);
+  });
+
+  function buildRasterStyle() {
+    return {
+      version: 8,
+      sources: { osm: { type: 'raster', tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'], tileSize: 256, attribution: '© OpenStreetMap contributors' } },
+      layers: [{ id: 'osm', type: 'raster', source: 'osm' }]
+    };
+  }
+
+  function getStyle(name) {
+    return name === 'OSM Raster' ? buildRasterStyle() : STYLES[name];
+  }
+
+  map = new maplibregl.Map({
+    container: 'map',
+    style: getStyle('Dark (CARTO)'),
+    center: [80.2707, 13.0827], // Chennai default
+    zoom: 12,
+    attributionControl: true
+  });
+
+  map.on('error', (e) => {
+    console.warn('Map style error, falling back to OSM Raster:', e);
+    showError('Map tiles failed to load. Switched to OSM fallback.');
+    setTimeout(hideError, 4000);
+    map.setStyle(buildRasterStyle());
+  });
+
+  styleSelect.addEventListener('change', () => {
+    const saved = marker ? marker.getLngLat() : null;
+    const zoom  = map.getZoom();
+    map.setStyle(getStyle(styleSelect.value));
+    map.once('styledata', () => {
+      addMapLayers();
+      if (saved) marker.setLngLat(saved);
+      if (trailCoords.length > 1) {
+        map.getSource('trail').setData({ type:'Feature', geometry:{ type:'LineString', coordinates: trailCoords } });
+      }
+    });
+  });
+
+  map.addControl(new maplibregl.NavigationControl(), 'bottom-right');
+  map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left');
+
+  function addMapLayers() {
+    if (!map.getSource('trail')) {
+      map.addSource('trail', { type:'geojson', data:{ type:'Feature', geometry:{ type:'LineString', coordinates:[] } } });
+    }
+    if (!map.getLayer('trail-line')) {
+      map.addLayer({ id:'trail-line', type:'line', source:'trail', paint:{ 'line-color':TRAIL_COLOR, 'line-width':3, 'line-opacity':0.8 } });
+    }
+    if (!map.getSource('accuracy')) {
+      map.addSource('accuracy', { type:'geojson', data:{ type:'Feature', geometry:{ type:'Point', coordinates:[] } } });
+    }
+    if (!map.getLayer('accuracy-circle')) {
+      map.addLayer({ id:'accuracy-circle', type:'circle', source:'accuracy', paint:{
+        'circle-radius': 20, 'circle-color': TRAIL_COLOR, 'circle-opacity': 0.15,
+        'circle-stroke-width': 1, 'circle-stroke-color': TRAIL_COLOR,
+        'circle-stroke-opacity': 0.4, 'circle-pitch-alignment': 'map'
+      }});
+    }
+  }
+
+  map.on('load', addMapLayers);
+
+  // ── Custom marker element ──────────────────────────────────────────────────
+  function createMarkerEl() {
+    const el = document.createElement('div');
+    el.style.cssText = `
+      width:20px; height:20px; border-radius:50%;
+      background:#39d353; border:3px solid #0d1117;
+      box-shadow:0 0 0 3px rgba(57,211,83,.4), 0 0 20px rgba(57,211,83,.3);
+    `;
+    return el;
+  }
+
+  // ── Accuracy circle radius (metres → pixels at zoom) ──────────────────────
+  function metresToPixels(metres, lat, zoom) {
+    const earthCirc = 40075016.686;
+    const metersPerPx = (earthCirc * Math.cos(lat * Math.PI / 180)) / Math.pow(2, zoom + 8);
+    return metres / metersPerPx;
+  }
+
+  // ── GPS handlers ──────────────────────────────────────────────────────────
+  function onPosition(pos) {
+    const { latitude: lat, longitude: lng, altitude, accuracy, speed, heading } = pos.coords;
+
+    hideError();
+    setStatus('active', '● Live');
+
+    // Coordinates
+    valLat.textContent = lat.toFixed(6);
+    valLng.textContent = lng.toFixed(6);
+    valAlt.textContent = altitude != null ? `${altitude.toFixed(1)} m` : '—';
+
+    // Accuracy bar (max scale 200 m)
+    const pct = Math.max(0, 100 - (accuracy / 200) * 100);
+    accBar.style.width  = `${pct}%`;
+    accBar.style.background = accuracy < 20 ? '#39d353' : accuracy < 60 ? '#d29922' : '#f85149';
+    accVal.textContent  = `±${accuracy.toFixed(0)} m`;
+
+    // Speed
+    const kmh = speed != null ? (speed * 3.6).toFixed(1) : '0';
+    valSpeed.textContent = kmh;
+
+    // Heading / compass
+    if (heading != null) {
+      valHeading.textContent = heading.toFixed(0);
+      needle.style.transform = `translateX(-50%) rotate(${heading}deg)`;
+    } else {
+      valHeading.textContent = '—';
+    }
+
+    const coords = [lng, lat];
+
+    // Update / create marker
+    if (!marker) {
+      marker = new maplibregl.Marker({ element: createMarkerEl() })
+        .setLngLat(coords)
+        .addTo(map);
+    } else {
+      marker.setLngLat(coords);
+    }
+
+    // Accuracy circle
+    if (map.getSource('accuracy')) {
+      map.getSource('accuracy').setData({
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: coords }
+      });
+      const r = metresToPixels(accuracy, lat, map.getZoom());
+      map.setPaintProperty('accuracy-circle', 'circle-radius', Math.max(r, 8));
+    }
+
+    // Trail
+    if (trailEnabled) {
+      trailCoords.push(coords);
+      if (map.getSource('trail')) {
+        map.getSource('trail').setData({
+          type: 'Feature',
+          geometry: { type: 'LineString', coordinates: trailCoords }
+        });
+      }
+    }
+
+    // First fix → fly to
+    if (firstFix) {
+      map.flyTo({ center: coords, zoom: 16, speed: 1.4 });
+      firstFix = false;
+      btnCenter.disabled = false;
+    }
+
+    // History
+    addHistory(lat, lng, accuracy);
+  }
+
+  function onError(err) {
+    let msg = '';
+    switch (err.code) {
+      case 1: msg = 'Permission denied. Please allow location access in your browser settings.'; break;
+      case 2: msg = 'Position unavailable. Check your device GPS or network.'; break;
+      case 3: msg = 'Timed out waiting for GPS signal.'; break;
+      default: msg = `GPS error: ${err.message}`;
+    }
+    showError(msg);
+    setStatus('error', '✕ Error');
+  }
+
+  // ── Start / Stop ───────────────────────────────────────────────────────────
+  btnStart.addEventListener('click', () => {
+    if (!('geolocation' in navigator)) {
+      showError('Geolocation is not supported by your browser.');
+      return;
+    }
+    hideError();
+    setStatus('', 'Acquiring…');
+    firstFix = true;
+    trailCoords = [];
+
+    watchId = navigator.geolocation.watchPosition(onPosition, onError, {
+      enableHighAccuracy: true,
+      timeout: 15000,
+      maximumAge: 0
+    });
+
+    btnStart.disabled = true;
+    btnStop.disabled  = false;
+  });
+
+  btnStop.addEventListener('click', () => {
+    if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+    watchId = null;
+    setStatus('', 'Idle');
+    btnStart.disabled = false;
+    btnStop.disabled  = true;
+  });
+
+  btnCenter.addEventListener('click', () => {
+    if (marker) map.flyTo({ center: marker.getLngLat(), zoom: 16, speed: 1.2 });
+  });
+
+  // ── Trail toggle ───────────────────────────────────────────────────────────
+  trailTgl.addEventListener('click', () => {
+    trailEnabled = !trailEnabled;
+    trailTgl.classList.toggle('on', trailEnabled);
+    if (map.getLayer('trail-line')) {
+      map.setLayoutProperty('trail-line', 'visibility', trailEnabled ? 'visible' : 'none');
+    }
+  });
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+  function setStatus(cls, text) {
+    statusPill.textContent = text;
+    statusPill.className   = 'status-pill' + (cls ? ` ${cls}` : '');
+  }
+
+  function showError(msg) {
+    errorBnr.textContent = msg;
+    errorBnr.style.display = 'block';
+  }
+  function hideError() { errorBnr.style.display = 'none'; }
+
+  function addHistory(lat, lng, acc) {
+    const now = new Date();
+    const ts  = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const div = document.createElement('div');
+    div.className = 'history-item';
+    div.innerHTML = `<span class="ts">${ts}</span>${lat.toFixed(5)}, ${lng.toFixed(5)} <span style="color:var(--warn)">±${acc.toFixed(0)}m</span>`;
+    if (histList.children.length === 1 && histList.children[0].tagName !== 'DIV'.toUpperCase() || histList.firstChild?.textContent?.includes('No waypoints')) {
+      histList.innerHTML = '';
+    }
+    histList.prepend(div);
+    if (histList.children.length > MAX_HISTORY) histList.lastChild.remove();
+  }
+</script>
+</body>
+</html>
